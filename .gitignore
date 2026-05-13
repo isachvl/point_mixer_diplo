@@ -22,6 +22,9 @@ Open3D/
 *.o
 *.ninja_deps
 *.ninja_log
+!docs/
+!docs/images/
+!docs/images/*.png
 
 obj_cls/classification_ModelNet40/checkpoints/
 obj_cls/classification_ModelNet40/data/
