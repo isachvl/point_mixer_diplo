@@ -26,6 +26,12 @@ def my_args():
     parser.add_argument("--drop_rate", type=float, default=0.1)
     parser.add_argument("--fea_dim", type=int, default=6, help='input point feat dim') 
     parser.add_argument("--classes", type=int, default=13, help='output classes')
+    parser.add_argument("--pointmixer_planes", default=None,
+                        help='Optional PointMixer channel plan, e.g. "16 32 64 128 256" for a small student.')
+    parser.add_argument("--pointmixer_width_multiplier", type=float, default=1.0,
+                        help='Scale default PointMixer channels when pointmixer_planes is not set.')
+    parser.add_argument("--pointmixer_share_planes", type=int, default=8,
+                        help='Grouped mixing channels divisor. Keep 8 unless changing the architecture deliberately.')
 
 
     # ------------
@@ -93,6 +99,19 @@ def my_args():
     parser.add_argument("--focal_gamma", type=float, default=2.0)
     parser.add_argument("--focal_loss_weight", type=float, default=1.0)
     parser.add_argument("--lovasz_loss_weight", type=float, default=0.0)
+    parser.add_argument("--kd_teacher_paths", default='',
+                        help='Semicolon/comma separated teacher checkpoint paths for logit distillation.')
+    parser.add_argument("--kd_teacher_weights", default='',
+                        help='Optional teacher weights, e.g. "0.8 0.2". Empty means uniform.')
+    parser.add_argument("--kd_temperature", type=float, default=3.0)
+    parser.add_argument("--kd_start_epoch", type=int, default=0,
+                        help='Delay KD until this epoch. 0 enables KD from the first epoch.')
+    parser.add_argument("--kd_confidence_threshold", type=float, default=0.0,
+                        help='Only distill points where the teacher ensemble max probability is at least this value.')
+    parser.add_argument("--kd_confidence_power", type=float, default=0.0,
+                        help='If > 0, weight per-point KD by teacher confidence ** this power.')
+    parser.add_argument("--kd_loss_weight", type=float, default=0.0)
+    parser.add_argument("--hard_loss_weight", type=float, default=1.0)
     
     parser.add_argument("--lr_STEP_SIZE", type=int, default=6)
     parser.add_argument("--lr_GAMMA", type=float, default=0.1)

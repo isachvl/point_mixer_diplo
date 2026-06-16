@@ -19,6 +19,12 @@ def get_network(args):
             'transdown': args.transdown,
             'stride': args.downsample,
         }
+    if args.arch in ('pointmixer', 'pointmixer_panoptic'):
+        kwargs.update({
+            'planes': getattr(args, 'pointmixer_planes', None),
+            'width_multiplier': getattr(args, 'pointmixer_width_multiplier', 1.0),
+            'share_planes': getattr(args, 'pointmixer_share_planes', 8),
+        })
     model = getNetwork(c=args.fea_dim, k=args.classes, nsample=args.nsample, **kwargs)
     
     return model

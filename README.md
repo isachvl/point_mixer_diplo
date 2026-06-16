@@ -4,6 +4,25 @@
 
 Основа проекта - официальный PointMixer ECCV 2022. В этой версии добавлены загрузчики ScanNet++, panoptic-разметка, semantic/focal/lovasz loss, class-balanced crops, отчеты по классам и Windows/Docker-скрипты для RTX 3060.
 
+## Что получилось
+
+Проект доведен до рабочего pipeline для indoor LiDAR-сцен: от подготовки ScanNet++ и собственных облаков точек до обучения, инференса и анализа качества по классам.
+
+Ключевые результаты:
+
+- основная PointMixer Panoptic: `mIoU=19.93%`, `6.315149M` параметров, `25.261196 MB` чистых fp32-весов;
+- строгий full-scene panoptic-прогон: `PQ=11.20%`, `SQ=74.42%`, `RQ=15.05%`, `AP50=7.43%`, `mAP=3.57%`;
+- student-модель после distillation: `mIoU=17.83%`, `4.865435M` параметров;
+- student стал меньше основной модели на `1.449714M` параметров, то есть на `22.956%`, при потере `2.10` процентного пункта mIoU.
+
+![Ключевые panoptic-метрики](docs/images/defense_panoptic_metrics.png)
+
+![Сравнение размера моделей](docs/images/defense_model_size_comparison.png)
+
+![Сравнение основной модели и student](docs/images/defense_distillation_comparison.png)
+
+Короткий текст для защиты и таблицы сравнения лежат в [docs/defense_summary.md](docs/defense_summary.md).
+
 ## Схема
 
 ![Схема PointMixer ScanNet++](docs/images/01_pointmixer_scannetpp_scheme.png)
@@ -180,6 +199,26 @@ dense005/no prevoxel:      mIoU 0.0070, неудачный запуск
 ```text
 /workspace/outputs/PointMixerScanNetPP_panoptic_rgb_pv004_block_balanced/2026-05-02_19-40-27__scannetpp__pointmixer_panoptic_3060/epoch=020--mIoU_val=0.1720--.ckpt
 ```
+
+## Маленькая модель и distillation
+
+Для сжатия модели добавлен режим small-student PointMixer. Он использует те же ScanNet++ loader, panoptic head, метрики и inference-скрипты, но ширина backbone задается через:
+
+```text
+POINTMIXER_PLANES="16 32 64 128 256"
+```
+
+Большие чекпоинты не загружаются в student напрямую через `LOAD_MODEL`, потому что размеры каналов другие. Вместо этого они подключаются как teacher-модели:
+
+```text
+KD_TEACHER_PATHS="/path/to/teacher_1.ckpt;/path/to/teacher_2.ckpt"
+KD_TEACHER_WEIGHTS="0.75 0.25"
+KD_TEMPERATURE=3.0
+KD_LOSS_WEIGHT=0.6
+HARD_LOSS_WEIGHT=0.4
+```
+
+Смысл: student учится и по обычной разметке ScanNet++, и по мягким вероятностям классов от сильных teacher-чекпоинтов. Это проще и стабильнее, чем feature/relation distillation, и не ломает текущий pipeline.
 
 ## Логи и отчеты
 

@@ -1,0 +1,30 @@
+source_id	source_name	scannetpp_name	note
+0	all_trash		ignored: too broad/noisy
+1	chair	chair	
+2	monitor	monitor	
+3	keyboard	keyboard	
+4	pc	computer tower	
+5	table	table	
+6	big_table	table	
+7	small_table	table	
+8	tv	tv	
+9	door	door	
+10	garbage	trash can	
+11	unknown_4what		ignored: unknown
+12	unknown_2what		ignored: unknown
+13	unknown_3what		ignored: unknown
+14	unknown_5what		ignored: unknown
+15	minibox	box	
+16	box	box	
+17	regiment	shelf	best guess: shelf/rack-like object
+18	unknown_6what		ignored: unknown
+19	battery		ignored: no safe ScanNet++ top100 equivalent
+20	cabinet	cabinet	
+21	wooden_cabinet	cabinet	
+22	window	window	
+23	ceiling	ceiling	
+24	lamp	ceiling lamp	best guess; change to table lamp if needed
+25	wall	wall	
+26	box2	box	
+27	air_conditioner		ignored: no exact ScanNet++ top100 equivalent
+28	floor	floor	

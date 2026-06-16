@@ -24,6 +24,9 @@ LR=${LR:-0.005}
 OPTIM=${OPTIM:-SGD}
 FEA_DIM=${FEA_DIM:-6}
 NSAMPLE=${NSAMPLE:-"8 8 8 8 8"}
+POINTMIXER_PLANES=${POINTMIXER_PLANES:-}
+POINTMIXER_WIDTH_MULTIPLIER=${POINTMIXER_WIDTH_MULTIPLIER:-1.0}
+POINTMIXER_SHARE_PLANES=${POINTMIXER_SHARE_PLANES:-8}
 BLOCK_SIZE=${BLOCK_SIZE:-0}
 MIN_POINTS_IN_BLOCK=${MIN_POINTS_IN_BLOCK:-1024}
 MIN_TRAIN_POINTS=${MIN_TRAIN_POINTS:-0}
@@ -44,6 +47,14 @@ SEMANTIC_LOSS_TYPE=${SEMANTIC_LOSS_TYPE:-ce}
 FOCAL_GAMMA=${FOCAL_GAMMA:-2.0}
 FOCAL_LOSS_WEIGHT=${FOCAL_LOSS_WEIGHT:-1.0}
 LOVASZ_LOSS_WEIGHT=${LOVASZ_LOSS_WEIGHT:-0.0}
+KD_TEACHER_PATHS=${KD_TEACHER_PATHS:-}
+KD_TEACHER_WEIGHTS=${KD_TEACHER_WEIGHTS:-}
+KD_TEMPERATURE=${KD_TEMPERATURE:-3.0}
+KD_START_EPOCH=${KD_START_EPOCH:-0}
+KD_CONFIDENCE_THRESHOLD=${KD_CONFIDENCE_THRESHOLD:-0.0}
+KD_CONFIDENCE_POWER=${KD_CONFIDENCE_POWER:-0.0}
+KD_LOSS_WEIGHT=${KD_LOSS_WEIGHT:-0.0}
+HARD_LOSS_WEIGHT=${HARD_LOSS_WEIGHT:-1.0}
 
 ARCH="pointmixer_panoptic"
 MODEL="net_pointmixer_panoptic"
@@ -101,6 +112,15 @@ fi
 if [ "${SEMANTIC_LABEL_SMOOTHING}" != "0" ] && [ "${SEMANTIC_LABEL_SMOOTHING}" != "0.0" ]; then
   EXTRA_ARGS+=(--semantic_label_smoothing "${SEMANTIC_LABEL_SMOOTHING}")
 fi
+if [ -n "${POINTMIXER_PLANES}" ]; then
+  EXTRA_ARGS+=(--pointmixer_planes "${POINTMIXER_PLANES}")
+fi
+if [ -n "${KD_TEACHER_PATHS}" ]; then
+  EXTRA_ARGS+=(--kd_teacher_paths "${KD_TEACHER_PATHS}")
+fi
+if [ -n "${KD_TEACHER_WEIGHTS}" ]; then
+  EXTRA_ARGS+=(--kd_teacher_weights "${KD_TEACHER_WEIGHTS}")
+fi
 
 echo "[PM INFO] Training ScanNet++ PointMixer Panoptic with ${CLASSES} classes."
 python train_pl.py \
@@ -118,6 +138,8 @@ python train_pl.py \
   --model "${MODEL}" --arch "${ARCH}" \
   --intraLayer "${INTRALAYER}" --interLayer "${INTERLAYER}" \
   --transdown "${TRANSDOWN}" --transup "${TRANSUP}" \
+  --pointmixer_width_multiplier "${POINTMIXER_WIDTH_MULTIPLIER}" \
+  --pointmixer_share_planes "${POINTMIXER_SHARE_PLANES}" \
   --nsample ${NSAMPLE} --drop_rate 0.1 --fea_dim "${FEA_DIM}" --classes "${CLASSES}" --loop "${LOOP}" \
   --voxel_size "${VOX_SIZE}" --train_voxel_max "${TRAIN_VOXEL_MAX}" --eval_voxel_max "${EVAL_VOXEL_MAX}" \
   --block_size "${BLOCK_SIZE}" --min_points_in_block "${MIN_POINTS_IN_BLOCK}" \
@@ -130,5 +152,11 @@ python train_pl.py \
   --focal_gamma "${FOCAL_GAMMA}" \
   --focal_loss_weight "${FOCAL_LOSS_WEIGHT}" \
   --lovasz_loss_weight "${LOVASZ_LOSS_WEIGHT}" \
+  --kd_temperature "${KD_TEMPERATURE}" \
+  --kd_start_epoch "${KD_START_EPOCH}" \
+  --kd_confidence_threshold "${KD_CONFIDENCE_THRESHOLD}" \
+  --kd_confidence_power "${KD_CONFIDENCE_POWER}" \
+  --kd_loss_weight "${KD_LOSS_WEIGHT}" \
+  --hard_loss_weight "${HARD_LOSS_WEIGHT}" \
   --cudnn_benchmark False \
   "${EXTRA_ARGS[@]}"

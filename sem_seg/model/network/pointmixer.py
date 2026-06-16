@@ -27,6 +27,32 @@ torch.cuda.manual_seed_all(seed) # if use multi-GPU
 # torch.backends.cudnn.benchmark=False 
 
 
+def _make_divisible(value, divisor=8):
+    value = int(round(float(value) / float(divisor)) * divisor)
+    return max(divisor, value)
+
+
+def _resolve_pointmixer_planes(planes=None, width_multiplier=1.0, share_planes=8):
+    base_planes = [32, 64, 128, 256, 512]
+    if planes is None or planes == '':
+        multiplier = float(width_multiplier or 1.0)
+        resolved = [_make_divisible(p * multiplier, share_planes) for p in base_planes]
+    elif isinstance(planes, str):
+        resolved = [int(p) for p in planes.replace(',', ' ').split()]
+    else:
+        resolved = [int(p) for p in planes]
+
+    if len(resolved) != 5:
+        raise ValueError('PointMixer needs exactly 5 channel values, got {}'.format(resolved))
+    if any(p <= 0 for p in resolved):
+        raise ValueError('PointMixer planes must be positive, got {}'.format(resolved))
+    if any(p % int(share_planes) != 0 for p in resolved):
+        raise ValueError(
+            'PointMixer planes must be divisible by share_planes={} for grouped mixing, got {}'.format(
+                share_planes, resolved))
+    return resolved
+
+
 class BilinearFeedForward(nn.Module):
 
     def __init__(self, in_planes1, in_planes2, out_planes):
@@ -184,7 +210,10 @@ class PointMixerSegNet(nn.Module):
         intraLayer='PointMixerIntraSetLayer',
         interLayer='PointMixerInterSetLayer',
         transup='SymmetricTransitionUpBlock', 
-        transdown='TransitionDownBlock'):
+        transdown='TransitionDownBlock',
+        planes=None,
+        width_multiplier=1.0,
+        share_planes=8):
         super().__init__()
         
         self.c = c
@@ -192,8 +221,13 @@ class PointMixerSegNet(nn.Module):
         self.interLayer = interLayer
         self.transup = transup
         self.transdown = transdown
-        self.in_planes, planes = c, [32, 64, 128, 256, 512]
-        fpn_planes, fpnhead_planes, share_planes = 128, 64, 8
+        self.in_planes = c
+        planes = _resolve_pointmixer_planes(
+            planes=planes,
+            width_multiplier=width_multiplier,
+            share_planes=share_planes)
+        self.planes = list(planes)
+        fpn_planes, fpnhead_planes = 128, 64
         
         assert stride[0] == 1, 'or you will meet errors.'
 

@@ -83,6 +83,10 @@ def parse_args():
                         help='Class indices to hide from confident outputs only.')
 
     parser.add_argument('--nsample', nargs='+', type=int, default=[8, 8, 8, 8, 8])
+    parser.add_argument('--pointmixer-planes', default=None,
+                        help='Optional channel plan for small/student checkpoints, e.g. "16 32 64 128 256".')
+    parser.add_argument('--pointmixer-width-multiplier', type=float, default=1.0)
+    parser.add_argument('--pointmixer-share-planes', type=int, default=8)
     parser.add_argument('--voxel-size', type=float, default=0.05)
     parser.add_argument('--input-voxel-size', type=float, default=0.05,
                         help='Deterministic input downsample. Use 0.05 for dense pc_aligned.ply.')
@@ -98,6 +102,9 @@ def build_model_args(args, classes):
         transdown='SymmetricTransitionDownBlock',
         transup='SymmetricTransitionUpBlock',
         nsample=args.nsample,
+        pointmixer_planes=args.pointmixer_planes,
+        pointmixer_width_multiplier=args.pointmixer_width_multiplier,
+        pointmixer_share_planes=args.pointmixer_share_planes,
         downsample=[1, 4, 4, 4, 4],
         drop_rate=0.1,
         fea_dim=6,
@@ -113,7 +120,42 @@ def build_model_args(args, classes):
         on_train=False,
         offset_loss_weight=1.0,
         offset_dir_loss_weight=0.2,
+        train_offset_only=False,
+        semantic_loss_type='ce',
+        focal_gamma=2.0,
+        focal_loss_weight=1.0,
+        lovasz_loss_weight=0.0,
+        semantic_label_smoothing=0.0,
+        class_weight_path=None,
+        kd_teacher_paths='',
+        kd_teacher_weights='',
+        kd_temperature=3.0,
+        kd_loss_weight=0.0,
+        hard_loss_weight=1.0,
     )
+
+
+def _hparam_get(obj, name, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def apply_checkpoint_arch_args(ckpt, model_args):
+    hparams = ckpt.get('hyper_parameters', {}) if isinstance(ckpt, dict) else {}
+    hargs = _hparam_get(hparams, 'args')
+    planes = _hparam_get(hargs, 'pointmixer_planes')
+    width_multiplier = _hparam_get(hargs, 'pointmixer_width_multiplier')
+    share_planes = _hparam_get(hargs, 'pointmixer_share_planes')
+
+    if not getattr(model_args, 'pointmixer_planes', None) and planes:
+        model_args.pointmixer_planes = planes
+    if width_multiplier is not None and not getattr(model_args, 'pointmixer_planes', None):
+        model_args.pointmixer_width_multiplier = float(width_multiplier)
+    if share_planes is not None:
+        model_args.pointmixer_share_planes = int(share_planes)
 
 
 def load_thing_classes(path, label_names, stuff_names, classes):
@@ -159,6 +201,7 @@ def resolve_class_filter(class_names, class_indices, label_names):
 
 def load_pointmixer_panoptic(checkpoint, model_args):
     ckpt = torch.load(checkpoint, map_location='cpu')
+    apply_checkpoint_arch_args(ckpt, model_args)
     state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
     state_dict = dict(state_dict)
     # Training checkpoints can store loss-only buffers that are not part of

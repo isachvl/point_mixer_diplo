@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
+from copy import deepcopy
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
 from .net_pointmixer import net_pointmixer
+from .network.get_network import get_network
 
 
 def _lovasz_grad(gt_sorted):
@@ -66,6 +69,44 @@ def focal_loss(logits, labels, ignore_label, gamma=2.0, class_weight=None):
     return loss.mean()
 
 
+def _split_arg_list(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    value = str(value).strip()
+    if not value:
+        return []
+    return [part.strip() for part in value.replace(';', ',').split(',') if part.strip()]
+
+
+def _split_float_list(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [float(v) for v in value]
+    value = str(value).strip()
+    if not value:
+        return []
+    return [float(part) for part in value.replace(',', ' ').split() if part.strip()]
+
+
+def _checkpoint_to_model_state(checkpoint):
+    state_dict = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint
+    state_dict = dict(state_dict)
+    has_model_prefix = any(str(key).startswith('model.') for key in state_dict.keys())
+    model_state = {}
+    for key, value in state_dict.items():
+        key = str(key)
+        if key == 'semantic_class_weight':
+            continue
+        if key.startswith('model.'):
+            model_state[key[len('model.'):]] = value
+        elif not has_model_prefix:
+            model_state[key] = value
+    return model_state
+
+
 class net_pointmixer_panoptic(net_pointmixer):
     """Lightning-обертка для обучения PointMixerPanoptic.
 
@@ -86,6 +127,17 @@ class net_pointmixer_panoptic(net_pointmixer):
             getattr(args, 'lovasz_loss_weight', 0.0) or 0.0)
         self.semantic_label_smoothing = float(
             getattr(args, 'semantic_label_smoothing', 0.0) or 0.0)
+        self.hard_loss_weight = float(getattr(args, 'hard_loss_weight', 1.0) or 1.0)
+        self.kd_loss_weight = float(getattr(args, 'kd_loss_weight', 0.0) or 0.0)
+        self.kd_temperature = float(getattr(args, 'kd_temperature', 3.0) or 3.0)
+        self.kd_start_epoch = int(getattr(args, 'kd_start_epoch', 0) or 0)
+        self.kd_confidence_threshold = max(
+            0.0, min(1.0, float(getattr(args, 'kd_confidence_threshold', 0.0) or 0.0)))
+        self.kd_confidence_power = max(
+            0.0, float(getattr(args, 'kd_confidence_power', 0.0) or 0.0))
+        self.kd_teacher_paths = _split_arg_list(getattr(args, 'kd_teacher_paths', ''))
+        self.kd_teacher_weights = []
+        self.kd_teachers = []
         weight_path = getattr(args, 'class_weight_path', None)
         if weight_path:
             # Веса классов нужны из-за дисбаланса датасета:
@@ -107,8 +159,61 @@ class net_pointmixer_panoptic(net_pointmixer):
         else:
             self.semantic_class_weight = None
 
+        if self.kd_loss_weight > 0.0:
+            if self.kd_teacher_paths:
+                self._load_kd_teachers(args)
+            elif self.global_rank == 0:
+                print('[PM KD WARN] kd_loss_weight > 0 but kd_teacher_paths is empty; KD disabled.')
+
         if self.train_offset_only:
             self._freeze_for_offset_only()
+
+    def _load_kd_teachers(self, args):
+        weights = _split_float_list(getattr(args, 'kd_teacher_weights', ''))
+        if not weights:
+            weights = [1.0 for _ in self.kd_teacher_paths]
+        if len(weights) != len(self.kd_teacher_paths):
+            raise ValueError(
+                'kd_teacher_weights count {} must match kd_teacher_paths count {}'.format(
+                    len(weights), len(self.kd_teacher_paths)))
+        total = sum(weights)
+        if total <= 0:
+            raise ValueError('kd_teacher_weights must sum to a positive value')
+        self.kd_teacher_weights = [float(weight) / float(total) for weight in weights]
+
+        teacher_args = deepcopy(args)
+        teacher_args.model = 'net_pointmixer_panoptic'
+        teacher_args.arch = 'pointmixer_panoptic'
+        teacher_args.pointmixer_planes = None
+        teacher_args.pointmixer_width_multiplier = 1.0
+        teacher_args.class_weight_path = None
+        teacher_args.kd_teacher_paths = ''
+        teacher_args.kd_loss_weight = 0.0
+        teacher_args.kd_start_epoch = 0
+        teacher_args.kd_confidence_threshold = 0.0
+        teacher_args.kd_confidence_power = 0.0
+        teacher_args.hard_loss_weight = 1.0
+        teacher_args.train_offset_only = False
+
+        loaded = []
+        for path in self.kd_teacher_paths:
+            checkpoint = torch.load(path, map_location='cpu')
+            teacher = get_network(teacher_args)
+            teacher.load_state_dict(_checkpoint_to_model_state(checkpoint), strict=True)
+            teacher.eval()
+            for param in teacher.parameters():
+                param.requires_grad = False
+            self.kd_teachers.append(teacher)
+            loaded.append(path)
+
+        if self.global_rank == 0:
+            print('[PM KD] loaded {} teacher(s):'.format(len(loaded)))
+            for weight, path in zip(self.kd_teacher_weights, loaded):
+                print('[PM KD] weight={:.4f} path={}'.format(weight, path))
+            print('[PM KD] start_epoch={} confidence_threshold={:.3f} confidence_power={:.3f}'.format(
+                self.kd_start_epoch,
+                self.kd_confidence_threshold,
+                self.kd_confidence_power))
 
     def _freeze_for_offset_only(self):
         """Freeze everything except the offset head for careful panoptic fine-tuning."""
@@ -126,6 +231,74 @@ class net_pointmixer_panoptic(net_pointmixer):
         # BatchNorm in the frozen backbone/semantic head must not drift during offset fine-tuning.
         self.model.eval()
         self.model.offset.train(self.training)
+
+    def train(self, mode=True):
+        super().train(mode)
+        for teacher in self.kd_teachers:
+            teacher.eval()
+        return self
+
+    def _ensure_kd_teachers_device(self, device):
+        for teacher in self.kd_teachers:
+            try:
+                teacher_device = next(teacher.parameters()).device
+            except StopIteration:
+                teacher_device = device
+            if teacher_device != device:
+                teacher.to(device)
+            teacher.eval()
+
+    def _distillation_loss(self, coord, feat, offset, student_logits, target):
+        if (not self.training) or not self.kd_teachers or self.kd_loss_weight <= 0.0:
+            return None
+        if self.kd_start_epoch > 0 and int(getattr(self, 'current_epoch', 0)) < self.kd_start_epoch:
+            return None
+
+        valid = target != self.ignore_label
+        if torch.sum(valid) == 0:
+            return student_logits.sum() * 0.0
+
+        temperature = max(float(self.kd_temperature), 1e-6)
+        self._ensure_kd_teachers_device(student_logits.device)
+        teacher_probs = None
+        teacher_confidence_probs = None
+        with torch.no_grad():
+            for weight, teacher in zip(self.kd_teacher_weights, self.kd_teachers):
+                teacher_outputs = teacher([coord, feat, offset])
+                teacher_logits = teacher_outputs['semantic_logits']
+                probs = F.softmax(teacher_logits / temperature, dim=1)
+                confidence_probs = F.softmax(teacher_logits, dim=1)
+                weighted_probs = float(weight) * probs
+                weighted_confidence_probs = float(weight) * confidence_probs
+                teacher_probs = weighted_probs if teacher_probs is None else teacher_probs + weighted_probs
+                teacher_confidence_probs = (
+                    weighted_confidence_probs if teacher_confidence_probs is None
+                    else teacher_confidence_probs + weighted_confidence_probs)
+
+        student_log_probs = F.log_softmax(student_logits / temperature, dim=1)
+        teacher_probs = teacher_probs.clamp(min=1e-8)
+        teacher_confidence = torch.max(teacher_confidence_probs, dim=1).values.detach()
+
+        if self.kd_confidence_threshold > 0.0:
+            valid = valid & (teacher_confidence >= self.kd_confidence_threshold)
+            if torch.sum(valid) == 0:
+                return student_logits.sum() * 0.0
+
+        if self.kd_confidence_power > 0.0:
+            per_point_kd = F.kl_div(
+                student_log_probs,
+                teacher_probs,
+                reduction='none').sum(dim=1)
+            weights = teacher_confidence.clamp(min=1e-6).pow(self.kd_confidence_power)
+            weights = weights[valid]
+            return (
+                (per_point_kd[valid] * weights).sum() /
+                weights.sum().clamp(min=1e-6)) * (temperature * temperature)
+
+        return F.kl_div(
+            student_log_probs[valid],
+            teacher_probs[valid],
+            reduction='batchmean') * (temperature * temperature)
 
     def _semantic_loss(self, semantic_logits, target):
         semantic_weight = self.semantic_class_weight
@@ -196,7 +369,11 @@ class net_pointmixer_panoptic(net_pointmixer):
 
         # Semantic loss учит модель отвечать "какой класс у точки".
         semantic_loss = self._semantic_loss(semantic_logits, target)
-        loss_dict['semantic_loss'] = semantic_loss
+        loss_dict['semantic_loss'] = self.hard_loss_weight * semantic_loss
+
+        kd_loss = self._distillation_loss(coord, feat, offset, semantic_logits, target)
+        if kd_loss is not None:
+            loss_dict['semantic_kd_loss'] = self.kd_loss_weight * kd_loss
 
         if target_instance is None or target_offset is None:
             # Если в датасете нет instance/offset-разметки, оставляем только

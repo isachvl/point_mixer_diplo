@@ -59,6 +59,10 @@ def parse_args():
     parser.add_argument('--ignore-label', type=int, default=255)
 
     parser.add_argument('--nsample', nargs='+', type=int, default=[8, 8, 8, 8, 8])
+    parser.add_argument('--pointmixer-planes', default=None,
+                        help='Optional channel plan for small/student checkpoints, e.g. "16 32 64 128 256".')
+    parser.add_argument('--pointmixer-width-multiplier', type=float, default=1.0)
+    parser.add_argument('--pointmixer-share-planes', type=int, default=8)
     parser.add_argument('--voxel-size', type=float, default=0.05)
     parser.add_argument('--input-voxel-size', type=float, default=0.0,
                         help='Optional deterministic input downsample. Use 0.05 for dense pc_aligned.ply.')
@@ -207,6 +211,9 @@ def build_model_args(args, classes):
         transdown='SymmetricTransitionDownBlock',
         transup='SymmetricTransitionUpBlock',
         nsample=args.nsample,
+        pointmixer_planes=args.pointmixer_planes,
+        pointmixer_width_multiplier=args.pointmixer_width_multiplier,
+        pointmixer_share_planes=args.pointmixer_share_planes,
         downsample=[1, 4, 4, 4, 4],
         drop_rate=0.1,
         fea_dim=6,
@@ -223,6 +230,29 @@ def build_model_args(args, classes):
     )
 
 
+def _hparam_get(obj, name, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def apply_checkpoint_arch_args(ckpt, model_args):
+    hparams = ckpt.get('hyper_parameters', {}) if isinstance(ckpt, dict) else {}
+    hargs = _hparam_get(hparams, 'args')
+    planes = _hparam_get(hargs, 'pointmixer_planes')
+    width_multiplier = _hparam_get(hargs, 'pointmixer_width_multiplier')
+    share_planes = _hparam_get(hargs, 'pointmixer_share_planes')
+
+    if not getattr(model_args, 'pointmixer_planes', None) and planes:
+        model_args.pointmixer_planes = planes
+    if width_multiplier is not None and not getattr(model_args, 'pointmixer_planes', None):
+        model_args.pointmixer_width_multiplier = float(width_multiplier)
+    if share_planes is not None:
+        model_args.pointmixer_share_planes = int(share_planes)
+
+
 def infer_classes_from_checkpoint(state_dict):
     for key, value in state_dict.items():
         if key.endswith('cls.3.weight'):
@@ -236,6 +266,7 @@ def is_panoptic_checkpoint(state_dict):
 
 def load_pointmixer(checkpoint, model_args):
     ckpt = torch.load(checkpoint, map_location='cpu')
+    apply_checkpoint_arch_args(ckpt, model_args)
     state_dict = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
     panoptic_checkpoint = is_panoptic_checkpoint(state_dict)
     if panoptic_checkpoint:
